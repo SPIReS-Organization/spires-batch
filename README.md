@@ -6,7 +6,7 @@ spacetime cubes.
 
 `spires-batch` builds on the single-unit convenience kernel exposed by the
 [`spires`](https://github.com/SPIReS-Organization/spires) metapackage
-(`spires.invert(...)`, which wires io → lut → r0 → inversion → postprocess for
+(`spires.invert(...)`, which wires io + lut + r0 → inversion → postprocess for
 **one** unit of work) and parallelizes it across **many** units. Schedulers,
 clusters, chunking, and job submission live here so the metapackage's
 convenience layer can stay light.
