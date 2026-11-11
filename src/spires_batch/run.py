@@ -155,3 +155,77 @@ def run_stack(units, kernel: Callable, shared: dict, client: Client, *,
     if records_path is not None:
         write_records(records_path, ordered)
     return ordered
+
+
+def _invert_block(invert, scene_block, background_block, lut, invert_kwargs):
+    """Executed on a worker for one pixel block. One thread: parallelism is across blocks."""
+    return invert(scene_block, background_block, lut, n_threads=1, **invert_kwargs)
+
+
+def run_scene(unit, shared: dict, client: Client, *, bbox=None, chunk_pixels: int = 512,
+              kernel=None, replicas: int = 2, store: bool = True, params: Optional[dict] = None) -> Record:
+    """Invert one scene (or a bbox of it) block-parallel across all workers.
+
+    ``kernel.load`` and ``kernel.align_r0`` run on the client; the scene and
+    background are cut into ``chunk_pixels`` squares, scattered off-graph, and
+    ``kernel.invert`` runs per block with one thread. Output is bit-identical to
+    ``kernel.whole`` on the same scene because every pixel is an independent
+    solve from the same initial guess. ``shared`` must contain ``lut``, ``r0``
+    and ``spec``; any other keys are forwarded to ``kernel.invert``.
+    """
+    from spires_batch import kernels as _kernels
+    kernel = kernel or _kernels.DEFAULT
+    _shared.check_shared(shared)
+    required = {"lut", "r0", "spec"}
+    if not required <= set(shared):
+        raise ValueError(f"run_scene needs shared keys {sorted(required)}; got {sorted(shared)}")
+    invert_kwargs = {k: v for k, v in shared.items() if k not in required}
+
+    parents = sorted(f"{k}={v}" for k, v in _shared.digests(shared).items())
+    handle = workspace.new_handle("retrieval", kernel.name,
+                                  dict(params or {}, unit=_unit_id(unit), bbox=list(bbox) if bbox else None),
+                                  parents)
+    if store and workspace.exists(handle):
+        return Record(unit=_unit_id(unit), handle=handle, status="skipped")
+
+    started = time.perf_counter()
+    try:
+        scene = kernel.load(unit, spec=shared["spec"], bbox=bbox)
+        background = kernel.align_r0(scene, shared["r0"])
+    except Exception as exc:   # noqa: BLE001
+        return Record(unit=_unit_id(unit), handle=handle, status="failed", seconds=time.perf_counter() - started,
+                      error_type=type(exc).__name__, error_message=str(exc), traceback=_tb.format_exc())
+
+    pairs = blocks.cut_pair(scene, background, chunk_pixels)
+    if _shared._nbytes(shared["lut"]) >= _shared.SCATTER_THRESHOLD_BYTES:
+        lut_future = _shared.scatter_shared(client, {"lut": shared["lut"]}, replicas=replicas)["lut"]
+    else:
+        lut_future = shared["lut"]
+    scene_futures = blocks.scatter(client, [s for s, _ in pairs], replicas=replicas)
+    bg_futures = blocks.scatter(client, [b for _, b in pairs], replicas=replicas)
+    futures = [client.submit(_invert_block, kernel.invert, s, b, lut_future, invert_kwargs, pure=False)
+               for s, b in zip(scene_futures, bg_futures)]
+    try:
+        parts = client.gather(futures)
+    except Exception as exc:   # noqa: BLE001 - a block failure is this unit's failure
+        if _shared_lost(client, {"lut": lut_future}) or any(f.status == "cancelled" for f in scene_futures):
+            raise SharedInputLost("scattered scene blocks or LUT were lost with their workers; "
+                                  "restart the run") from exc
+        return Record(unit=_unit_id(unit), handle=handle, status="failed", seconds=time.perf_counter() - started,
+                      error_type=type(exc).__name__, error_message=str(exc), traceback=_tb.format_exc())
+    finally:
+        for f in futures + scene_futures + bg_futures:
+            f.release()
+
+    result = blocks.reassemble(parts)
+    seconds = time.perf_counter() - started
+    if store:
+        try:
+            workspace.store(handle, result, {"unit": _unit_id(unit), "kernel": kernel.name, "parents": parents,
+                                             "bbox": list(bbox) if bbox else None, "chunk_pixels": chunk_pixels,
+                                             "blocks": len(pairs), "seconds": seconds})
+        except Exception as exc:   # noqa: BLE001
+            return Record(unit=_unit_id(unit), handle=handle, status="failed", seconds=seconds,
+                          error_type=type(exc).__name__, error_message=str(exc), traceback=_tb.format_exc())
+    return Record(unit=_unit_id(unit), handle=handle, status="done", seconds=seconds,
+                  worker=None, result=None if store else result)
