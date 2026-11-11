@@ -85,6 +85,8 @@ def _netcdf_safe_attrs(obj):
         for key, value in attrs.items():
             if value is None:
                 out[key] = ""
+            elif isinstance(value, (bool, np.bool_)):
+                out[key] = int(value)
             elif isinstance(value, (str, int, float, np.integer, np.floating, np.ndarray)):
                 out[key] = value
             elif isinstance(value, (list, tuple)) and all(isinstance(v, (int, float)) for v in value):
@@ -115,25 +117,29 @@ def store(handle, obj, meta_in) -> None:
         return
     tmp = root() / "handles" / f".tmp-{handle}"
     shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(parents=True)
-    record = dict(meta_in)
-    record.update(
-        handle=handle,
-        kind=kind,
-        created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-    )
-    if kind == "retrieval":
-        import xarray
+    try:
+        tmp.mkdir(parents=True)
+        record = dict(meta_in)
+        record.update(
+            handle=handle,
+            kind=kind,
+            created_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        )
+        if kind == "retrieval":
+            import xarray
 
-        if not isinstance(obj, xarray.Dataset):
-            raise TypeError(f"retrieval artifacts must be xarray.Dataset, got {type(obj).__name__}")
-        record["stats"] = _stats(obj)
-        _netcdf_safe_attrs(obj).to_netcdf(tmp / "data.nc", engine="h5netcdf")
-    else:
-        (tmp / "data.json").write_text(json.dumps(obj, indent=2, default=str))
-    (tmp / "meta.json").write_text(json.dumps(record, indent=2, default=str))
-    shutil.rmtree(final, ignore_errors=True)
-    os.rename(tmp, final)
+            if not isinstance(obj, xarray.Dataset):
+                raise TypeError(f"retrieval artifacts must be xarray.Dataset, got {type(obj).__name__}")
+            record["stats"] = _stats(obj)
+            _netcdf_safe_attrs(obj).to_netcdf(tmp / "data.nc", engine="h5netcdf")
+        else:
+            (tmp / "data.json").write_text(json.dumps(obj, indent=2, default=str))
+        (tmp / "meta.json").write_text(json.dumps(record, indent=2, default=str))
+        shutil.rmtree(final, ignore_errors=True)
+        os.rename(tmp, final)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 
 def load(handle):

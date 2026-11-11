@@ -49,7 +49,7 @@ def reassemble(parts: list) -> xr.Dataset:
     y_order = np.concatenate([p.y.values for p in parts if p.x.values[0] == first_x])
     first_y = parts[0].y.values[0]
     x_order = np.concatenate([p.x.values for p in parts if p.y.values[0] == first_y])
-    out = xr.combine_by_coords(parts, combine_attrs="drop").reindex(y=y_order, x=x_order)
+    out = xr.combine_by_coords(parts, combine_attrs="override").reindex(y=y_order, x=x_order)
     out.attrs = dict(parts[0].attrs)
     return out
 
