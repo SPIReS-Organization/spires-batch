@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 from spires_io.hls import L30_SPEC
@@ -47,3 +49,15 @@ def test_run_scene_skips_if_stored(client, scene_dirs, shared):
     first = run.run_scene(scene_dirs[0], shared, client)
     second = run.run_scene(scene_dirs[0], shared, client)
     assert first.handle == second.handle and second.status == "skipped"
+
+
+def _boom_invert(scene, background, lut, *, n_threads=1, **kw):
+    raise RuntimeError("block exploded")
+
+
+def test_run_scene_block_failure_is_failed_record(client, scene_dirs, shared):
+    boom = dataclasses.replace(kernels.DEFAULT, name="boom", invert=_boom_invert)
+    record = run.run_scene(scene_dirs[0], shared, client, kernel=boom, chunk_pixels=32)
+    assert record.status == "failed" and record.error_type == "RuntimeError"
+    assert "block exploded" in record.error_message
+    assert not workspace.exists(record.handle)
