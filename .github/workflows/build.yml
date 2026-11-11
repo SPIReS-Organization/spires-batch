@@ -10,7 +10,8 @@ on:
 jobs:
   build:
     name: Build + import smoke on Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    # ubuntu-latest (26.04) has no setup-python build for 3.9 (EOL)
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
