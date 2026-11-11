@@ -9,7 +9,7 @@ failure never aborts a run.
 import json
 import time
 import traceback as _tb
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -38,9 +38,8 @@ class Record:
     result: Any = field(default=None, repr=False, compare=False)   # only kept when store=False
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        d.pop("result")
-        return d
+        # not dataclasses.asdict: that deep-copies `result` (a Dataset) before we drop it
+        return {k: getattr(self, k) for k in self.__dataclass_fields__ if k != "result"}
 
 
 def write_records(path, records: list) -> None:
@@ -131,13 +130,20 @@ def run_stack(units, kernel: Callable, shared: dict, client: Client, *,
                 outcome = {"ok": False, "seconds": 0.0, "worker": None, "error_type": type(exc).__name__,
                            "error_message": str(exc), "traceback": _tb.format_exc()}
             if outcome["ok"]:
-                if store:
-                    workspace.store(handles[unit], outcome["result"],
-                                    {"unit": _unit_id(unit), "kernel": kernel_name, "parents": parents,
-                                     "seconds": outcome["seconds"], "worker": outcome["worker"]})
-                records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="done",
-                                       seconds=outcome["seconds"], worker=outcome["worker"],
-                                       result=None if store else outcome["result"])
+                try:
+                    if store:
+                        workspace.store(handles[unit], outcome["result"],
+                                        {"unit": _unit_id(unit), "kernel": kernel_name, "parents": parents,
+                                         "seconds": outcome["seconds"], "worker": outcome["worker"]})
+                except Exception as exc:    # bad result type or disk full: this unit fails, the run goes on
+                    records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
+                                           seconds=outcome["seconds"], worker=outcome["worker"],
+                                           error_type=type(exc).__name__, error_message=str(exc),
+                                           traceback=_tb.format_exc())
+                else:
+                    records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="done",
+                                           seconds=outcome["seconds"], worker=outcome["worker"],
+                                           result=None if store else outcome["result"])
             else:
                 records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
                                        seconds=outcome["seconds"], worker=outcome["worker"],

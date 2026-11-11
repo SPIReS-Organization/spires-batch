@@ -1,10 +1,12 @@
 import json
+
 import numpy as np
 import pytest
+import xarray as xr
 from spires_io.hls import L30_SPEC
 
 from spires_batch import kernels, run, workspace
-from conftest import make_lut, make_r0
+from conftest import make_r0
 
 
 @pytest.fixture(autouse=True)
@@ -73,3 +75,29 @@ def test_run_stack_passes_worker_threads_to_kernel(client, scene_dirs, shared):
 
 def _echo_threads(unit, *, n_threads):
     return n_threads
+
+
+def _returns_int(unit, *, n_threads):
+    return 7
+
+
+def test_run_stack_store_failure_is_a_failed_record(client, scene_dirs):
+    records = run.run_stack(scene_dirs[:1], _returns_int, {}, client)
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == "failed" and record.error_type == "TypeError"
+    assert record.traceback and record.seconds > 0
+    assert not workspace.exists(record.handle)
+
+
+def test_run_stack_resolves_scattered_shared_inputs(client, scene_dirs):
+    # 512*512*2 float32 = 2 MiB, above the 1 MiB scatter threshold, so `big`
+    # reaches the worker as a Future and dask must resolve it inside the kwargs.
+    big = xr.DataArray(np.full((512, 512, 2), 0.5, np.float32), dims=("y", "x", "band"))
+    record = run.run_stack(scene_dirs[:1], _sum_big, {"big": big}, client, store=False)[0]
+    assert record.status == "done", record.traceback
+    assert record.result == 512 * 512 * 2 * 0.5
+
+
+def _sum_big(unit, *, n_threads, big):
+    return float(big.sum())
