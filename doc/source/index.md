@@ -17,4 +17,4 @@ reference (autodoc) as the scale-out code lands. Track progress in the
 
 - Parallelize the `spires` metapackage's single-unit `invert` kernel across many
   units of work.
-- Provide dask / slurm backends (opt-in extras `spires-batch[dask]`, `[slurm]`).
+- Provide the dask backend (a core dependency) and an opt-in slurm backend (extra `spires-batch[slurm]`).

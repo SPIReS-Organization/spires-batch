@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12']
 
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +32,7 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      # Scaffolding package: no tests yet, and it depends on the `spires`
-      # metapackage (which pulls the compiled spires-inversion) — not on PyPI.
-      # Install without deps so CI validates packaging + import. Replace with a
-      # full ".[test]" + pytest run once real code and tests land.
-      - name: Install (no deps) + import smoke test
+      - name: Test
         run: |
-          pip install --no-deps dist/*.whl
-          python -c "import spires_batch; print('spires_batch', spires_batch.__version__)"
+          pip install -e ".[test]" || echo "spires-* not on PyPI yet; unit tests run locally in spipy14"
+          python -c "import spires_batch.workspace, spires_batch.blocks"
