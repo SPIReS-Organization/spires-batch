@@ -71,11 +71,14 @@ def align_r0(scene: xr.Dataset, r0: xr.DataArray) -> xr.DataArray:
             f"R0 band labels {list(r0.band.values)} differ from scene band labels "
             f"{list(target.band.values)}; relabel the background before running")
     r0 = r0.transpose("y", "x", "band")
+    step = float(abs(target.x.values[1] - target.x.values[0])) if target.sizes["x"] > 1 else 1.0
+    # Absolute tolerance in metres: rtol on northings near 4e6 m would be ~40 m.
+    atol = step * 1e-3
     if r0.sizes["y"] == target.sizes["y"] and r0.sizes["x"] == target.sizes["x"] \
-            and np.allclose(r0.y.values, target.y.values) and np.allclose(r0.x.values, target.x.values):
+            and np.allclose(r0.y.values, target.y.values, rtol=0, atol=atol) \
+            and np.allclose(r0.x.values, target.x.values, rtol=0, atol=atol):
         aligned = r0.assign_coords(y=target.y, x=target.x)
     else:
-        step = float(abs(target.x.values[1] - target.x.values[0])) if target.sizes["x"] > 1 else 1.0
         try:
             aligned = r0.sel(y=target.y, x=target.x, method="nearest", tolerance=step / 2)
         except KeyError as exc:

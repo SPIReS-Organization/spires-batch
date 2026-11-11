@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import xarray as xr
-from spires_contract import ContractError
 from spires_contract.results import validate_results
 from spires_io.hls import L30_SPEC
 
