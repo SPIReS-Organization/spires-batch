@@ -51,6 +51,23 @@ def test_store_is_atomic_no_tmp_left(ws_root):
     assert not any(p.name.startswith(".tmp-") for p in (ws_root / "handles").iterdir())
 
 
+def test_bool_attrs_are_stored_as_int(ws_root):
+    h = workspace.new_handle("retrieval", "s", {}, [])
+    ds = _ds().assign_attrs(flag=True, nflag=np.bool_(False))
+    workspace.store(h, ds, {})
+    back = workspace.load(h)
+    assert back.attrs["flag"] == 1
+    assert back.attrs["nflag"] == 0
+
+
+def test_store_failure_leaves_no_tmp(ws_root):
+    h = workspace.new_handle("retrieval", "s", {}, [])
+    with pytest.raises(TypeError):
+        workspace.store(h, "not a dataset", {})
+    assert not any(p.name.startswith(".tmp-") for p in (ws_root / "handles").iterdir())
+    assert not workspace.exists(h)
+
+
 def test_benchmark_kind_roundtrip():
     h = workspace.new_handle("benchmark", "bench", {"workers": 8}, [])
     workspace.store(h, {"scenes_per_hour": 12.5, "records": []}, {})

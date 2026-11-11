@@ -35,9 +35,11 @@ def test_cut_covers_scene_exactly_and_blocks_are_contiguous_copies():
 
 def test_reassemble_is_exact_roundtrip():
     scene = _scene(50, 70)
+    scene["reflectance"].attrs["units"] = "1"
     back = blocks.reassemble(blocks.cut(scene, chunk_pixels=16))
     xr.testing.assert_identical(back["reflectance"], scene["reflectance"])
     xr.testing.assert_identical(back["valid"], scene["valid"])
+    assert back["reflectance"].attrs == {"units": "1"}
     assert back.attrs == scene.attrs
 
 
