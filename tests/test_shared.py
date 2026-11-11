@@ -39,3 +39,10 @@ def test_digests_are_stable_and_content_sensitive():
     assert d == shared.digests({"r0": b, "spec": L30_SPEC, "n": 3})
     assert d["r0"] != shared.digests({"r0": c})["r0"]
     assert d["spec"] == "hls_l30" and d["n"] == "3"
+    ya = xr.DataArray(np.ones((2, 2), np.float32), dims=("y", "x"), coords={"y": [0.0, 1.0]})
+    yb = xr.DataArray(np.ones((2, 2), np.float32), dims=("y", "x"), coords={"y": [10.0, 11.0]})
+    assert shared.digests({"r0": ya})["r0"] != shared.digests({"r0": yb})["r0"]
+    ones_f32 = np.ones((2, 2), np.float32)
+    assert shared.digests({"x": ones_f32})["x"] != shared.digests({"x": ones_f32.astype(np.int32)})["x"]
+    assert shared.digests({"x": np.ones((2, 4), np.float32)})["x"] != \
+        shared.digests({"x": np.ones((4, 2), np.float32)})["x"]

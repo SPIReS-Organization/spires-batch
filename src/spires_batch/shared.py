@@ -26,6 +26,8 @@ def check_shared(shared: dict) -> None:
     for name, value in shared.items():
         if _is_lazy(value):
             raise TypeError(f"shared[{name!r}] is dask-backed; load it into memory before scattering")
+        if isinstance(value, (np.ndarray, xr.DataArray, xr.Dataset)):
+            continue  # always picklable; serializing a multi-GB R0 just to probe it is waste
         try:
             pickle.dumps(value)
         except Exception as exc:
@@ -58,6 +60,17 @@ def scatter_shared(client, shared: dict, replicas: int = 2) -> dict:
     return out
 
 
+def _hash_array(h, arr) -> None:
+    """Feed dtype, shape and raw bytes so equal bytes with different layout hash differently."""
+    arr = np.asarray(arr)
+    if arr.dtype.kind == "O":
+        # object arrays serialize to pointer addresses; hash their text instead
+        arr = arr.astype(str)
+    h.update(str(arr.dtype).encode())
+    h.update(str(arr.shape).encode())
+    h.update(np.ascontiguousarray(arr).tobytes())
+
+
 def digests(shared: dict) -> dict[str, str]:
     """Short, content-sensitive identifiers for the workspace handle."""
     out = {}
@@ -65,10 +78,22 @@ def digests(shared: dict) -> dict[str, str]:
         if isinstance(value, xr.Dataset):
             h = hashlib.sha256()
             for var in sorted(value.data_vars):
-                h.update(np.ascontiguousarray(value[var].values).tobytes())
+                h.update(str(value[var].dims).encode())
+                _hash_array(h, value[var].values)
+            for coord in sorted(value.coords):
+                _hash_array(h, value[coord].values)
             out[name] = h.hexdigest()[:12]
-        elif isinstance(value, (xr.DataArray, np.ndarray)):
-            out[name] = hashlib.sha256(np.ascontiguousarray(np.asarray(value)).tobytes()).hexdigest()[:12]
+        elif isinstance(value, xr.DataArray):
+            h = hashlib.sha256()
+            h.update(str(value.dims).encode())
+            _hash_array(h, value.values)
+            for coord in sorted(value.coords):
+                _hash_array(h, value.coords[coord].values)
+            out[name] = h.hexdigest()[:12]
+        elif isinstance(value, np.ndarray):
+            h = hashlib.sha256()
+            _hash_array(h, value)
+            out[name] = h.hexdigest()[:12]
         elif hasattr(value, "sensor"):          # a SensorSpec
             out[name] = str(value.sensor)
         else:
