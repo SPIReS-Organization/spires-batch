@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from distributed import Client, as_completed, get_worker
+from distributed import Client, Future, as_completed, get_worker
 from distributed.client import FutureCancelledError
 
 from spires_batch import blocks, shared as _shared, workspace
@@ -81,10 +81,16 @@ def _check_memory(units, unit_bytes, client):
 
 
 def _shared_lost(client, shared_futures) -> bool:
-    futures = [f for f in shared_futures.values() if hasattr(f, "key")]
+    """True if any scattered shared future has no surviving holder. Cancelled counts as lost."""
+    futures = [f for f in shared_futures.values() if isinstance(f, Future)]
     if not futures:
         return False
-    who = client.who_has(futures)
+    if any(f.status == "cancelled" for f in futures):
+        return True    # who_has raises FuturesCancelledError on these; they are lost by definition
+    try:
+        who = client.who_has(futures)
+    except Exception:  # noqa: BLE001 - if we cannot even ask, the data cannot be assumed present
+        return True
     return any(not who.get(f.key) for f in futures)
 
 
@@ -197,17 +203,20 @@ def run_scene(unit, shared: dict, client: Client, *, bbox=None, chunk_pixels: in
                       error_type=type(exc).__name__, error_message=str(exc), traceback=_tb.format_exc())
 
     pairs = blocks.cut_pair(scene, background, chunk_pixels)
+    n_blocks = len(pairs)
     if _shared._nbytes(shared["lut"]) >= _shared.SCATTER_THRESHOLD_BYTES:
         lut_future = _shared.scatter_shared(client, {"lut": shared["lut"]}, replicas=replicas)["lut"]
     else:
         lut_future = shared["lut"]
-    scene_futures = blocks.scatter(client, [s for s, _ in pairs], replicas=replicas)
-    bg_futures = blocks.scatter(client, [b for _, b in pairs], replicas=replicas)
-    futures = [client.submit(_invert_block, kernel.invert, s, b, lut_future, invert_kwargs, pure=False)
-               for s, b in zip(scene_futures, bg_futures)]
+    futures = scene_futures = bg_futures = []
     try:
+        scene_futures = blocks.scatter(client, [s for s, _ in pairs], replicas=replicas)
+        bg_futures = blocks.scatter(client, [b for _, b in pairs], replicas=replicas)
+        futures = [client.submit(_invert_block, kernel.invert, s, b, lut_future, invert_kwargs, pure=False)
+                   for s, b in zip(scene_futures, bg_futures)]
+        del scene, background, pairs   # the scattered copies are now the only ones; free the client's
         parts = client.gather(futures)
-    except Exception as exc:   # noqa: BLE001 - a block failure is this unit's failure
+    except Exception as exc:   # noqa: BLE001 - a scatter or block failure is this unit's failure
         if _shared_lost(client, {"lut": lut_future}) or any(f.status == "cancelled" for f in scene_futures):
             raise SharedInputLost("scattered scene blocks or LUT were lost with their workers; "
                                   "restart the run") from exc
@@ -223,7 +232,7 @@ def run_scene(unit, shared: dict, client: Client, *, bbox=None, chunk_pixels: in
         try:
             workspace.store(handle, result, {"unit": _unit_id(unit), "kernel": kernel.name, "parents": parents,
                                              "bbox": list(bbox) if bbox else None, "chunk_pixels": chunk_pixels,
-                                             "blocks": len(pairs), "seconds": seconds})
+                                             "blocks": n_blocks, "seconds": seconds})
         except Exception as exc:   # noqa: BLE001
             return Record(unit=_unit_id(unit), handle=handle, status="failed", seconds=seconds,
                           error_type=type(exc).__name__, error_message=str(exc), traceback=_tb.format_exc())
