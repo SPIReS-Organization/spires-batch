@@ -12,19 +12,25 @@ license = { text = "MIT" }
 authors = [{ name = "Niklas Griessbaum" }]
 keywords = ["snow", "remote sensing", "dask", "slurm", "batch", "SPIRES"]
 
-# Batch builds on the metapackage's single-unit convenience kernel
-# (`spires.invert`) and parallelizes it across many units of work. The
-# scaling backends (dask, slurm) are heavy and opt-in.
+# Orchestration only: spires-io loads scenes, spires-inversion inverts them,
+# spires-contract validates the boundaries. dask-distributed is the engine,
+# not an extra. SLURM (dask-jobqueue) stays an untested optional extra.
 dependencies = [
-    "spires",
+    "spires-contract",
+    "spires-io",
+    "spires-inversion",
     "xarray",
+    "numpy",
+    "dask[distributed]",
+    "h5netcdf",
 ]
 
 [project.optional-dependencies]
-dask = ["dask[distributed]"]
 slurm = ["dask-jobqueue"]
-all = ["dask[distributed]", "dask-jobqueue"]
-test = ["pytest"]
+test = ["pytest", "rasterio", "affine"]
+
+[project.scripts]
+spires-batch = "spires_batch.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/SPIReS-Organization/spires-batch"
@@ -35,7 +41,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 
 [tool.setuptools_scm]
 version_scheme = "post-release"
