@@ -87,3 +87,12 @@ def test_invert_threads_do_not_change_result(scene_dirs, lut):
 
 def test_scene_bytes(scene_dirs):
     assert kernels.scene_bytes(scene_dirs[0], L30_SPEC) == 64 * 64 * 7 * 4 * kernels.BYTES_FACTOR
+
+
+def test_align_r0_shifted_background_is_resampled_not_relabelled(scene_dirs):
+    scene = kernels.load(scene_dirs[0], spec=L30_SPEC)
+    r0 = make_r0(scene) + xr.DataArray(np.arange(64, dtype=np.float32) * 0.001, dims="y")
+    with pytest.raises(ValueError, match="background grid"):
+        kernels.align_r0(scene, r0.assign_coords(y=r0.y + 30.0))
+    out = kernels.align_r0(scene, r0.assign_coords(y=r0.y + 10.0))
+    np.testing.assert_array_equal(out.values, r0.transpose("y", "x", "band").values)
