@@ -101,3 +101,13 @@ def test_run_stack_resolves_scattered_shared_inputs(client, scene_dirs):
 
 def _sum_big(unit, *, n_threads, big):
     return float(big.sum())
+
+
+def test_run_stack_unsizable_unit_is_failed_not_abort(client, scene_dirs, shared, tmp_path):
+    from conftest import write_l30_scene
+    no_first_band = write_l30_scene(tmp_path, 50, drop_band="coastal")
+    records = run.run_stack(scene_dirs[:1] + [no_first_band], kernels.invert_scene, shared, client,
+                            unit_bytes=lambda u: kernels.scene_bytes(u, L30_SPEC))
+    assert [r.status for r in records] == ["done", "failed"]
+    assert records[1].error_type == "SceneLayoutError"
+    assert not workspace.exists(records[1].handle)

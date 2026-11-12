@@ -67,17 +67,32 @@ def _run_unit(kernel, unit, shared_kwargs):
                 "traceback": _tb.format_exc()}
 
 
-def _check_memory(units, unit_bytes, client):
+def _check_memory(units, unit_bytes, client) -> dict:
+    """Return ``{unit: exception}`` for units whose size could not be read (they fail, the run goes on).
+
+    A unit that *can* be sized but does not fit the smallest worker raises
+    ``MemoryCheckError``: that is a cluster-shape mistake, not a bad scene.
+    """
     limits = worker_memory_limits(client)
     smallest = min(limits.values()) if limits else None
-    if smallest is None:
-        return
+    unreadable = {}
     for unit in units:
-        need = int(unit_bytes(unit))
-        if need > smallest:
+        try:
+            need = int(unit_bytes(unit))
+        except Exception as exc:  # noqa: BLE001 - a missing band is this unit's failure
+            unreadable[unit] = exc
+            continue
+        if smallest is not None and need > smallest:
             raise MemoryCheckError(
                 f"unit {unit!s} needs ~{need / 2**30:.1f} GiB but the smallest worker memory_limit is "
                 f"{smallest / 2**30:.1f} GiB; use fewer workers (more memory each) or run_scene")
+    return unreadable
+
+
+def _release_shared(shared_futures: dict) -> None:
+    for f in shared_futures.values():
+        if isinstance(f, Future):
+            f.release()
 
 
 def _shared_lost(client, shared_futures) -> bool:
@@ -109,8 +124,7 @@ def run_stack(units, kernel: Callable, shared: dict, client: Client, *,
     if not callable(kernel):
         raise TypeError("kernel must be callable")
     _shared.check_shared(shared)
-    if unit_bytes is not None:
-        _check_memory(units, unit_bytes, client)
+    unreadable = _check_memory(units, unit_bytes, client) if unit_bytes is not None else {}
 
     kernel_name = getattr(kernel, "__name__", type(kernel).__name__)
     parents = sorted(f"{k}={v}" for k, v in _shared.digests(shared).items())
@@ -119,48 +133,63 @@ def run_stack(units, kernel: Callable, shared: dict, client: Client, *,
 
     records = {u: Record(unit=_unit_id(u), handle=handles[u], status="skipped")
                for u in units if store and workspace.exists(handles[u])}
+    for u, exc in unreadable.items():
+        if u not in records:
+            records[u] = Record(unit=_unit_id(u), handle=handles[u], status="failed",
+                                error_type=type(exc).__name__, error_message=str(exc),
+                                traceback="".join(_tb.format_exception(exc)))
     todo = [u for u in units if u not in records]
 
-    if todo:
-        shared_futures = _shared.scatter_shared(client, shared, replicas=replicas)
-        futures = {client.submit(_run_unit, kernel, u, shared_futures, pure=False): u for u in todo}
-        for future in as_completed(futures):
-            unit = futures[future]
-            try:
-                outcome = future.result()
-            except (FutureCancelledError, Exception) as exc:    # worker died mid-task, or dask-level error
-                if _shared_lost(client, shared_futures):
-                    raise SharedInputLost(
-                        "every worker holding a scattered shared input died; scattered data has no recipe "
-                        "and cannot be recomputed — restart the run (consider replicas>2)") from exc
-                outcome = {"ok": False, "seconds": 0.0, "worker": None, "error_type": type(exc).__name__,
-                           "error_message": str(exc), "traceback": _tb.format_exc()}
-            if outcome["ok"]:
-                try:
-                    if store:
-                        workspace.store(handles[unit], outcome["result"],
-                                        {"unit": _unit_id(unit), "kernel": kernel_name, "parents": parents,
-                                         "seconds": outcome["seconds"], "worker": outcome["worker"]})
-                except Exception as exc:    # bad result type or disk full: this unit fails, the run goes on
-                    records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
-                                           seconds=outcome["seconds"], worker=outcome["worker"],
-                                           error_type=type(exc).__name__, error_message=str(exc),
-                                           traceback=_tb.format_exc())
-                else:
-                    records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="done",
-                                           seconds=outcome["seconds"], worker=outcome["worker"],
-                                           result=None if store else outcome["result"])
-            else:
-                records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
-                                       seconds=outcome["seconds"], worker=outcome["worker"],
-                                       error_type=outcome["error_type"], error_message=outcome["error_message"],
-                                       traceback=outcome["traceback"])
-            future.release()
+    shared_futures = {}
+    try:
+        if todo:
+            shared_futures = _shared.scatter_shared(client, shared, replicas=replicas)
+            futures = {client.submit(_run_unit, kernel, u, shared_futures, pure=False): u for u in todo}
+            for future in as_completed(futures):
+                _collect(future, futures[future], client, shared_futures, handles, records,
+                         kernel_name, parents, store)
+    finally:
+        _release_shared(shared_futures)
 
     ordered = [records[u] for u in units]
     if records_path is not None:
         write_records(records_path, ordered)
     return ordered
+
+
+def _collect(future, unit, client, shared_futures, handles, records, kernel_name, parents, store) -> None:
+    """Turn one finished unit future into its Record; raises only SharedInputLost."""
+    try:
+        outcome = future.result()
+    except (FutureCancelledError, Exception) as exc:    # worker died mid-task, or dask-level error
+        if _shared_lost(client, shared_futures):
+            raise SharedInputLost(
+                "every worker holding a scattered shared input died; scattered data has no recipe "
+                "and cannot be recomputed — restart the run (consider replicas>2)") from exc
+        outcome = {"ok": False, "seconds": 0.0, "worker": None, "error_type": type(exc).__name__,
+                   "error_message": str(exc), "traceback": _tb.format_exc()}
+    finally:
+        future.release()
+    if not outcome["ok"]:
+        records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
+                               seconds=outcome["seconds"], worker=outcome["worker"],
+                               error_type=outcome["error_type"], error_message=outcome["error_message"],
+                               traceback=outcome["traceback"])
+        return
+    try:
+        if store:
+            workspace.store(handles[unit], outcome["result"],
+                            {"unit": _unit_id(unit), "kernel": kernel_name, "parents": parents,
+                             "seconds": outcome["seconds"], "worker": outcome["worker"]})
+    except Exception as exc:    # bad result type or disk full: this unit fails, the run goes on
+        records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="failed",
+                               seconds=outcome["seconds"], worker=outcome["worker"],
+                               error_type=type(exc).__name__, error_message=str(exc),
+                               traceback=_tb.format_exc())
+    else:
+        records[unit] = Record(unit=_unit_id(unit), handle=handles[unit], status="done",
+                               seconds=outcome["seconds"], worker=outcome["worker"],
+                               result=None if store else outcome["result"])
 
 
 def _invert_block(invert, scene_block, background_block, lut, invert_kwargs):
@@ -189,7 +218,7 @@ def run_scene(unit, shared: dict, client: Client, *, bbox=None, chunk_pixels: in
 
     parents = sorted(f"{k}={v}" for k, v in _shared.digests(shared).items())
     handle = workspace.new_handle("retrieval", kernel.name,
-                                  dict(params or {}, unit=_unit_id(unit), bbox=list(bbox) if bbox else None),
+                                  dict(params or {}, unit=_unit_id(unit), bbox=[float(v) for v in bbox] if bbox else None),
                                   parents)
     if store and workspace.exists(handle):
         return Record(unit=_unit_id(unit), handle=handle, status="skipped")
@@ -225,6 +254,7 @@ def run_scene(unit, shared: dict, client: Client, *, bbox=None, chunk_pixels: in
     finally:
         for f in futures + scene_futures + bg_futures:
             f.release()
+        _release_shared({"lut": lut_future})
 
     result = blocks.reassemble(parts)
     seconds = time.perf_counter() - started
