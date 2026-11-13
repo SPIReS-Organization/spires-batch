@@ -15,7 +15,7 @@ from spires_batch import kernels, run, workspace
 from spires_batch.cluster import local_cluster
 
 LUT = "/data/spires/luts/spires_reflectance_lut_hlsl30_dust_skiles_size3.nc"
-R0 = "/data/spires/r0/mammoth_hlsl30_r0.nc"
+R0 = "/data/spires/r0/mammoth_hls_l30_r0.nc"
 SCENES = sorted(glob.glob("/data/spires/scenes/hls_l30/HLS.L30.T11SLB.*"))
 
 def main():
