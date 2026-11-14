@@ -4,10 +4,9 @@ Blocking is by dim name: ``y`` and ``x`` are cut into ``chunk_pixels`` squares
 with a ragged last block; every other dim (``band``) stays whole. Each block is
 an ``ascontiguousarray`` copy so the scattered payload never pins the parent
 array. Scattering with ``direct=True, hash=False`` and replicating to ``n``
-workers rather than ``broadcast=True`` is lifted from spipyservice
-``spires/service.py:_scatter_blocks`` (measured there: in-graph chunking does
-not shrink what the scheduler receives, ratio 1.00; off-graph scatter cut the
-pickled graph from 79.7 MB to 32 KB).
+workers rather than ``broadcast=True`` follows an earlier measurement: in-graph
+chunking does not shrink what the scheduler receives (ratio 1.00), while
+off-graph scatter cut the pickled graph from 79.7 MB to 32 KB.
 """
 import numpy as np
 import xarray as xr

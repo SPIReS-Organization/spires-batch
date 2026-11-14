@@ -3,8 +3,7 @@
 A handle is ``<kind>-<sha256(json(stage, sorted params, parents))[:12]>``, so
 asking for the same stage on the same parents with the same parameters names
 the same artifact and a re-run skips completed units instead of redoing them.
-Lifted from spipyservice_pipeline/workspace.py; kinds reduced to ``retrieval``
-(a netCDF Dataset) and ``benchmark`` (a JSON document). Standard library at
+Kinds are ``retrieval`` (a netCDF Dataset) and ``benchmark`` (a JSON document). Standard library at
 module top; xarray is imported where needed.
 """
 import datetime

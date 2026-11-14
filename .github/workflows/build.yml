@@ -34,5 +34,5 @@ jobs:
 
       - name: Test
         run: |
-          pip install -e ".[test]" || echo "spires-* not on PyPI yet; unit tests run locally in spipy14"
+          pip install -e ".[test]" || echo "spires-* not on PyPI yet; unit tests run locally"
           python -c "import spires_batch.workspace, spires_batch.blocks"

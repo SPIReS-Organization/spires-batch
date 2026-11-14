@@ -56,7 +56,6 @@ Artifacts land under `$SPIRES_BATCH_WORKSPACE` (default `~/.cache/spires-batch/w
 ## Development
 
 ```bash
-conda activate spipy14
-pip install -e . --no-deps          # spires-io / spires-inversion / spires-contract are already in the env
+pip install -e ".[test]"
 pytest tests -q
 ```

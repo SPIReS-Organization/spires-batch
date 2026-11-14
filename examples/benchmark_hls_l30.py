@@ -1,12 +1,12 @@
-"""Poster benchmark: scenes/hour and per-scene wall-clock vs cluster shape.
+"""Throughput benchmark: scenes/hour and per-scene wall-clock vs cluster shape.
 
-Stack: HLS L30 T11SLB 2024-10-01..2025-06-30 (fetch first with
-    spires-fetch --dest /scratch/spires/scenes --sensor hls_l30 --aoi mammoth --start 2024-10-01 --end 2025-06-30
+Stack: one water year of HLS L30 scenes for one MGRS tile (fetch first with
+    spires-fetch --dest scenes --sensor hls_l30 --bbox ... --start 2024-10-01 --end 2025-06-30
 ). Configurations: 128x1 64x2 32x4 16x8 8x16 (stack) and 1x8 1x32 1x128 (scene).
 Each configuration runs in a fresh cluster and a fresh workspace root so nothing
 is skipped. Results are stored as a ``benchmark`` artifact and printed as JSON.
 
-    python examples/benchmark_hls_l30.py --scenes-glob '/scratch/spires/scenes/hls_l30/HLS.L30.T11SLB.*' \
+    python examples/benchmark_hls_l30.py --lut lut.nc --r0 r0.nc --scenes-glob 'scenes/hls_l30/HLS.L30.*' \
         --configs 128x1 64x2 32x4 16x8 8x16 --scene-configs 1x8 1x32 1x128
 """
 import argparse
@@ -25,9 +25,6 @@ from spires_inversion import load_reflectance_lut
 
 from spires_batch import kernels, run, workspace
 from spires_batch.cluster import local_cluster
-
-LUT = "/data/spires/luts/spires_reflectance_lut_hlsl30_dust_skiles_size3.nc"
-R0 = "/data/spires/r0/mammoth_hls_l30_r0.nc"
 
 
 def parse_shape(s):
@@ -85,7 +82,9 @@ def bench_scene(scene, shared, workers, threads, chunk_pixels):
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--scenes-glob", default="/scratch/spires/scenes/hls_l30/HLS.L30.T11SLB.*")
+    p.add_argument("--lut", required=True, help="reflectance LUT NetCDF for hls_l30")
+    p.add_argument("--r0", required=True, help="background reflectance (R0) NetCDF on the scene grid")
+    p.add_argument("--scenes-glob", required=True, help="glob of HLS L30 scene directories")
     p.add_argument("--configs", nargs="*", default=["128x1", "64x2", "32x4", "16x8", "8x16"])
     p.add_argument("--scene-configs", nargs="*", default=["1x8", "1x32", "1x128"])
     p.add_argument("--chunk-pixels", type=int, default=512)
@@ -95,8 +94,8 @@ def main(argv=None):
     scenes = sorted(glob.glob(args.scenes_glob))[: args.max_scenes]
     if not scenes:
         sys.exit(f"no scenes match {args.scenes_glob}")
-    shared = {"lut": kernels.lut_for_spec(load_reflectance_lut(LUT, expected_lap_type="dust"), L30_SPEC),
-              "r0": load_background_reflectance(R0), "spec": L30_SPEC}
+    shared = {"lut": kernels.lut_for_spec(load_reflectance_lut(args.lut, expected_lap_type="dust"), L30_SPEC),
+              "r0": load_background_reflectance(args.r0), "spec": L30_SPEC}
 
     results = []
     keep_root = os.environ.get("SPIRES_BATCH_WORKSPACE")
