@@ -44,6 +44,11 @@ The cluster shape `workers × threads_per_worker` is the single knob:
 `1×128` for one scene as fast as possible. The C++ inversion releases the GIL,
 so threads inside a worker genuinely run concurrently.
 
+The local cluster is the benchmarked back-end. A SLURM back-end is provided through
+dask-jobqueue: `--backend slurm` (or `slurm_cluster(...)`) submits SLURM jobs. It is
+untested on the development host, which is not a SLURM client. Other schedulers
+that dask-jobqueue supports are not wired here.
+
 ```bash
 spires-batch stack --sensor hls_l30 --lut lut.nc --r0 r0.nc --workers 16 --threads 8 scenes/HLS.L30.*
 spires-batch scene --sensor hls_l30 --lut lut.nc --r0 r0.nc --workers 1 --threads 64 \

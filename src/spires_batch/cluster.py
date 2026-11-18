@@ -26,6 +26,36 @@ def local_cluster(workers: int, threads_per_worker: int, memory_limit=None, **kw
     return Client(cluster)
 
 
+def slurm_cluster(jobs: int, cores: int, memory: str, queue: str, walltime: str = "01:00:00",
+                  wait_timeout: str = "600s", **kw) -> Client:
+    """``SLURMCluster`` from dask-jobqueue, scaled to ``jobs`` SLURM jobs, returned as a Client.
+
+    ``cores``, ``memory``, ``queue`` and ``walltime`` describe one SLURM job and are
+    passed to ``SLURMCluster``; extra keyword arguments go to it unchanged. Blocks
+    until one worker has connected or ``wait_timeout`` elapses. On that timeout the
+    client and cluster are closed, which cancels the submitted jobs.
+
+    Untested on the development host, which is not a SLURM client. It is provided so
+    the same stack runs under SLURM via dask-jobqueue (``pip install spires-batch[slurm]``).
+    """
+    try:
+        from dask_jobqueue import SLURMCluster
+    except ImportError as exc:
+        raise ImportError(
+            "slurm_cluster needs dask-jobqueue; install it with `pip install dask-jobqueue` "
+            "or `pip install spires-batch[slurm]`") from exc
+    cluster = SLURMCluster(cores=cores, memory=memory, queue=queue, walltime=walltime, **kw)
+    cluster.scale(jobs=jobs)
+    client = Client(cluster)
+    try:
+        client.wait_for_workers(1, timeout=wait_timeout)
+    except BaseException:
+        client.close()
+        cluster.close()
+        raise
+    return client
+
+
 def worker_memory_limits(client: Client) -> dict[str, int]:
     info = client.scheduler_info()["workers"]
     return {addr: int(w["memory_limit"]) for addr, w in info.items()}

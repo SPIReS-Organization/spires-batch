@@ -8,7 +8,7 @@ from spires_io.background import load_background_reflectance
 from spires_inversion import load_reflectance_lut
 
 from spires_batch import kernels, run, workspace
-from spires_batch.cluster import local_cluster
+from spires_batch.cluster import local_cluster, slurm_cluster
 
 SPECS = {"hls_l30": hls.L30_SPEC, "hls_s30": hls.S30_SPEC, "landsat": landsat.SPEC, "sentinel2": sentinel2.SPEC}
 
@@ -17,10 +17,17 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--sensor", required=True, choices=sorted(SPECS))
     p.add_argument("--lut", required=True, type=Path, help="canonical reflectance LUT (.nc)")
     p.add_argument("--r0", required=True, type=Path, help="background reflectance (.nc with r0_reflectance)")
-    p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--threads", type=int, default=8, help="threads per worker")
-    p.add_argument("--memory-limit", default=None, help="per worker, e.g. 64GB (default: RAM / workers)")
+    p.add_argument("--workers", type=int, default=8, help="local backend only")
+    p.add_argument("--threads", type=int, default=8, help="local backend only: threads per worker")
+    p.add_argument("--memory-limit", default=None, help="local backend only: per worker, e.g. 64GB (default: RAM / workers)")
     p.add_argument("--records", type=Path, default=None, help="write per-unit JSON records here")
+    p.add_argument("--backend", choices=["local", "slurm"], default="local",
+                   help="dask cluster back-end; slurm submits jobs via dask-jobqueue")
+    p.add_argument("--slurm-jobs", type=int, default=1, help="slurm backend: SLURM jobs to submit")
+    p.add_argument("--slurm-cores", type=int, default=1, help="slurm backend: cores per SLURM job")
+    p.add_argument("--slurm-memory", default="16GB", help="slurm backend: memory per SLURM job, e.g. 64GB")
+    p.add_argument("--slurm-queue", default=None, help="slurm backend: SLURM partition (required)")
+    p.add_argument("--slurm-walltime", default="01:00:00", help="slurm backend: HH:MM:SS per SLURM job")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,10 +52,20 @@ def load_shared(args) -> dict:
     return {"lut": lut, "r0": r0, "spec": spec}
 
 
+def make_client(args):
+    if args.backend == "local":
+        return local_cluster(args.workers, args.threads, memory_limit=args.memory_limit)
+    return slurm_cluster(jobs=args.slurm_jobs, cores=args.slurm_cores, memory=args.slurm_memory,
+                         queue=args.slurm_queue, walltime=args.slurm_walltime)
+
+
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.backend == "slurm" and not args.slurm_queue:
+        parser.error("--backend slurm requires --slurm-queue")
     shared = load_shared(args)
-    client = local_cluster(args.workers, args.threads, memory_limit=args.memory_limit)
+    client = make_client(args)
     try:
         if args.command == "stack":
             records = run.run_stack(args.scenes, kernels.invert_scene, shared, client,
