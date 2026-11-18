@@ -1,10 +1,10 @@
 """spires-batch: run the SPIReS retrieval at scale over stacks of granules."""
-from spires_batch.cluster import local_cluster
+from spires_batch.cluster import local_cluster, slurm_cluster
 from spires_batch.kernels import DEFAULT, SceneKernel, invert_scene, lut_for_spec
 from spires_batch.run import Record, MemoryCheckError, run_scene, run_stack, write_records
 from spires_batch.shared import SharedInputLost
 
-__all__ = ["local_cluster", "DEFAULT", "SceneKernel", "invert_scene", "lut_for_spec",
+__all__ = ["local_cluster", "slurm_cluster", "DEFAULT", "SceneKernel", "invert_scene", "lut_for_spec",
            "Record", "MemoryCheckError", "run_scene", "run_stack", "write_records", "SharedInputLost"]
 
 try:
